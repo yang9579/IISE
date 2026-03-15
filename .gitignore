@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.zip
+data/
+detection_results/
+Labeled Images/
