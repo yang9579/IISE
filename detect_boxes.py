@@ -163,22 +163,92 @@ def destripe_rows(gray, mask):
     return destriped
 
 
-def snap_to_outer_border(gray, x, y, w, h, pad=10):
-    """Expand bbox by a fixed padding on all sides to include the outer black border.
+def snap_to_outer_border(gray_destripe, x, y, w, h,
+                          border=12, bg_lo=95, bg_hi=115, max_trim=60):
+    """Bidirectional bbox refinement using the destriped image.
 
-    A fixed pad is used because the background brightness varies across images:
-    on dark backgrounds the old adaptive snap worked, but on lighter backgrounds
-    (e.g. 2026-02-16 upper boxes) the medium-gray background (~145) is
-    indistinguishable from the dark border by intensity alone, so adaptive
-    threshold-based snap never triggered. A fixed pad of 10 px reliably covers
-    the typical border thickness (~8-12 px) in all cases.
+    Pre-computes row/col means once for efficiency, then:
+      1. If edge strip mean is in background range [bg_lo, bg_hi]: trim inward.
+         - Stops at dark  (<bg_lo): outer dark frame found → keep edge.
+         - Stops at bright (>bg_hi): dot boundary → expand outward by `border` px.
+      2. If edge is already dark (<bg_lo): outer frame present → no change.
+      3. If edge is already bright (>bg_hi): dot at edge → expand by `border` px.
     """
-    H, W = gray.shape
-    x2 = max(0, x - pad)
-    y2 = max(0, y - pad)
-    x2_end = min(W, x + w + pad)
-    y2_end = min(H, y + h + pad)
-    return x2, y2, x2_end - x2, y2_end - y2
+    H, W = gray_destripe.shape
+    frac = 0.2  # use middle 60% of perpendicular dimension
+
+    # Pre-compute row means (middle 60% of columns) and col means (middle 60% of rows)
+    mh = max(1, int(h * frac))
+    mw = max(1, int(w * frac))
+    # Row means for horizontal edge scan (top/bot): mean over middle cols per row
+    roi_rows = gray_destripe[max(0, y - max_trim):min(H, y + h + max_trim),
+                              max(0, x + mw):min(W, x + w - mw)]
+    row_means = roi_rows.mean(axis=1).astype(float)   # shape: rows in scan range
+    row0 = max(0, y - max_trim)  # offset: row_means[i] = mean of image row (row0 + i)
+
+    # Col means for vertical edge scan (lft/rgt): mean over middle rows per col
+    roi_cols = gray_destripe[max(0, y + mh):min(H, y + h - mh),
+                              max(0, x - max_trim):min(W, x + w + max_trim)]
+    col_means = roi_cols.mean(axis=0).astype(float)   # shape: cols in scan range
+    col0 = max(0, x - max_trim)  # offset: col_means[j] = mean of image col (col0 + j)
+
+    def row_mean(r):
+        i = r - row0
+        return float(row_means[i]) if 0 <= i < len(row_means) else 105.0
+
+    def col_mean(c):
+        j = c - col0
+        return float(col_means[j]) if 0 <= j < len(col_means) else 105.0
+
+    # Top edge: trim downward while in background range
+    v = row_mean(y)
+    if bg_lo <= v <= bg_hi:
+        for _ in range(max_trim):
+            if h <= 2: break
+            nv = row_mean(y + 1)
+            if bg_lo <= nv <= bg_hi: y += 1; h -= 1
+            else: break
+        v = row_mean(y)
+    if v > bg_hi:
+        y = max(0, y - border); h = min(H - y, h + border)
+
+    # Bottom edge: trim upward while in background range
+    v = row_mean(y + h - 1)
+    if bg_lo <= v <= bg_hi:
+        for _ in range(max_trim):
+            if h <= 2: break
+            nv = row_mean(y + h - 2)
+            if bg_lo <= nv <= bg_hi: h -= 1
+            else: break
+        v = row_mean(y + h - 1)
+    if v > bg_hi:
+        h = min(H - y, h + border)
+
+    # Left edge: trim rightward while in background range
+    v = col_mean(x)
+    if bg_lo <= v <= bg_hi:
+        for _ in range(max_trim):
+            if w <= 2: break
+            nv = col_mean(x + 1)
+            if bg_lo <= nv <= bg_hi: x += 1; w -= 1
+            else: break
+        v = col_mean(x)
+    if v > bg_hi:
+        x = max(0, x - border); w = min(W - x, w + border)
+
+    # Right edge: trim leftward while in background range
+    v = col_mean(x + w - 1)
+    if bg_lo <= v <= bg_hi:
+        for _ in range(max_trim):
+            if w <= 2: break
+            nv = col_mean(x + w - 2)
+            if bg_lo <= nv <= bg_hi: w -= 1
+            else: break
+        v = col_mean(x + w - 1)
+    if v > bg_hi:
+        w = min(W - x, w + border)
+
+    return x, y, w, h
 
 
 def nms(rects, iou_thresh=0.3):
@@ -337,10 +407,10 @@ def detect_in_circle(gray, cx, cy, r):
     candidates.sort(key=lambda r: r[4], reverse=True)
     top2 = candidates[:2]
 
-    # Expand each bbox by a fixed pad to include the outer black border.
+    # Refine each bbox using the destriped image (trim background, add border).
     snapped = []
     for x, y, w, h, sc in top2:
-        x2, y2, w2, h2 = snap_to_outer_border(gray_orig, x, y, w, h)
+        x2, y2, w2, h2 = snap_to_outer_border(gray, x, y, w, h)
         snapped.append((x2, y2, w2, h2, sc))
     return snapped, edges_vis, closed_vis
 

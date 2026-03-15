@@ -27,16 +27,15 @@ for img_path, label in tests:
         continue
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     circles = get_circle_params(gray.shape)
-    total = 0
     per = []
+    all_boxes = []
     for cx, cy, r in circles:
         boxes, _, _ = detect_in_circle(gray, cx, cy, r)
-        total += len(boxes)
-        per.append(len(boxes))
+        per.append(boxes)
+        all_boxes.extend(boxes)
+    total = len(all_boxes)
     status = "OK" if total == 4 else "MISS"
-    print(f"[{status}] {label}: {total}/4  (L={per[0]}, R={per[1]})")
-    for i, (cx, cy, r) in enumerate(circles):
-        side = 'L' if i == 0 else 'R'
-        boxes, _, _ = detect_in_circle(gray, cx, cy, r)
+    print(f"[{status}] {label}: {total}/4  (L={len(per[0])}, R={len(per[1])})")
+    for side, boxes in zip(['L', 'R'], per):
         for x, y, w, h, sc in boxes:
             print(f"      {side}: ({x},{y},{w},{h}) sc={sc:.2f}")
