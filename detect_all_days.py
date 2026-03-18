@@ -31,7 +31,7 @@ OUT_ROOT.mkdir(parents=True, exist_ok=True)
 COLORS = [(0, 0, 255), (0, 255, 0), (255, 255, 0), (0, 255, 255)]
 
 
-def detect_and_annotate(img_path, out_path):
+def detect_and_annotate(img_path, out_path=None):
     img  = cv2.imread(str(img_path))
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
@@ -41,17 +41,18 @@ def detect_and_annotate(img_path, out_path):
         boxes, _, _ = detect_in_circle(gray, cx, cy, r)
         all_boxes.extend(boxes)
 
-    vis = img.copy()
-    for i, (x, y, w, h, sc) in enumerate(all_boxes):
-        color = COLORS[i % len(COLORS)]
-        cv2.rectangle(vis, (x, y), (x + w, y + h), color, 3)
-        label = f"#{i+1} {sc:.1f}"
-        cv2.putText(vis, label, (x + 2, y + 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3)
-        cv2.putText(vis, label, (x + 2, y + 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
+    if out_path is not None:
+        vis = img.copy()
+        for i, (x, y, w, h, sc) in enumerate(all_boxes):
+            color = COLORS[i % len(COLORS)]
+            cv2.rectangle(vis, (x, y), (x + w, y + h), color, 3)
+            label = f"#{i+1} {sc:.1f}"
+            cv2.putText(vis, label, (x + 2, y + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3)
+            cv2.putText(vis, label, (x + 2, y + 20),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 1)
+        cv2.imwrite(str(out_path), vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
-    cv2.imwrite(str(out_path), vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return all_boxes
 
 
@@ -64,7 +65,8 @@ def process_day(day_dir, n_limit=None):
         return [], []
 
     out_dir = OUT_ROOT / day_dir.name
-    out_dir.mkdir(exist_ok=True)
+    if not args.no_save_images:
+        out_dir.mkdir(exist_ok=True)
 
     print(f"[{day_dir.name}] {len(images)} images")
     counts = []
@@ -72,7 +74,7 @@ def process_day(day_dir, n_limit=None):
     for img_path in images:
         out_path = out_dir / f"{img_path.stem}_annot.jpg"
         try:
-            boxes = detect_and_annotate(img_path, out_path)
+            boxes = detect_and_annotate(img_path, out_path if not args.no_save_images else None)
             n = len(boxes)
             counts.append(n)
             print(f"  {img_path.name}: {n} boxes")
@@ -98,9 +100,15 @@ def process_day(day_dir, n_limit=None):
 # ── main ───────────────────────────────────────────────────────────────────────
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--day",  default=None, help="Process only this day (e.g. 2026-02-16)")
+parser.add_argument("--day",   default=None, help="Process only this day (e.g. 2026-02-16)")
 parser.add_argument("--limit", type=int, default=None, help="Limit images per day")
+parser.add_argument("--no-save-images", action="store_true", help="Skip saving annotated images")
+parser.add_argument("--out-dir", default=None, help="Override output directory")
 args = parser.parse_args()
+
+if args.out_dir:
+    OUT_ROOT = Path(args.out_dir)
+    OUT_ROOT.mkdir(parents=True, exist_ok=True)
 
 if args.day:
     day_dirs = [DATA_DIR / args.day]
