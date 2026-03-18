@@ -1,10 +1,18 @@
 """
-Run box detection on the first 10 images of each day in data/.
-Outputs annotated images to detection_results/all_days/<date>/
-Uses cv2 for fast annotation (no matplotlib).
+Run box detection on all images for a single day (or all days).
+
+Usage:
+  python detect_all_days.py                    # all days, all images
+  python detect_all_days.py --day 2026-02-16   # single day (for SLURM array)
+  python detect_all_days.py --n 10             # limit to first N images per day
+
+Outputs:
+  detection_results/all_days/<date>/<stem>_annot.jpg
+  detection_results/all_days/<date>/detections_<date>.csv
 """
 
 import sys
+import argparse
 import cv2
 import numpy as np
 import traceback
@@ -18,8 +26,6 @@ from detect_boxes import detect_in_circle, get_circle_params
 DATA_DIR = Path("/users/8/yang9579/Github/IISE/data")
 OUT_ROOT = Path("/users/8/yang9579/Github/IISE/detection_results/all_days")
 OUT_ROOT.mkdir(parents=True, exist_ok=True)
-
-N_PER_DAY = 10
 
 # Colors: BGR
 COLORS = [(0, 0, 255), (0, 255, 0), (255, 255, 0), (0, 255, 255)]
@@ -49,51 +55,81 @@ def detect_and_annotate(img_path, out_path):
     return all_boxes
 
 
-day_dirs = sorted(d for d in DATA_DIR.iterdir() if d.is_dir())
-print(f"Found {len(day_dirs)} day directories\n")
-
-all_counts = []
-csv_rows   = []
-
-for day_dir in day_dirs:
-    images = sorted(day_dir.glob("*.jpg"))[:N_PER_DAY]
+def process_day(day_dir, n_limit=None):
+    images = sorted(day_dir.glob("*.jpg"))
+    if n_limit:
+        images = images[:n_limit]
     if not images:
         print(f"  [{day_dir.name}] no images, skipping")
-        continue
+        return [], []
 
     out_dir = OUT_ROOT / day_dir.name
     out_dir.mkdir(exist_ok=True)
 
-    print(f"[{day_dir.name}]")
-    day_counts = []
+    print(f"[{day_dir.name}] {len(images)} images")
+    counts = []
+    csv_rows = []
     for img_path in images:
         out_path = out_dir / f"{img_path.stem}_annot.jpg"
         try:
             boxes = detect_and_annotate(img_path, out_path)
             n = len(boxes)
-            day_counts.append(n)
-            print(f"  {img_path.name}: {n} boxes  {[(x,y,w,h) for x,y,w,h,_ in boxes]}")
+            counts.append(n)
+            print(f"  {img_path.name}: {n} boxes")
             for x, y, w, h, sc in boxes:
                 csv_rows.append([day_dir.name, img_path.name, x, y, w, h, round(sc, 2)])
         except Exception:
             traceback.print_exc()
-            day_counts.append(-1)
+            counts.append(-1)
 
-    exact4 = sum(c == 4 for c in day_counts)
-    print(f"  → {exact4}/{len(day_counts)} exact-4\n")
-    all_counts.extend(day_counts)
+    exact4 = sum(c == 4 for c in counts)
+    print(f"  → {exact4}/{len(counts)} exact-4\n")
 
-# Save CSV summary
-csv_path = OUT_ROOT / "detections.csv"
-with open(csv_path, "w", newline="") as f:
-    w = csv.writer(f)
-    w.writerow(["date", "filename", "x", "y", "w", "h", "score"])
-    w.writerows(csv_rows)
+    # Per-day CSV
+    csv_path = OUT_ROOT / day_dir.name / f"detections_{day_dir.name}.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["date", "filename", "x", "y", "w", "h", "score"])
+        w.writerows(csv_rows)
+
+    return counts, csv_rows
+
+
+# ── main ───────────────────────────────────────────────────────────────────────
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--day",  default=None, help="Process only this day (e.g. 2026-02-16)")
+parser.add_argument("--limit", type=int, default=None, help="Limit images per day")
+args = parser.parse_args()
+
+if args.day:
+    day_dirs = [DATA_DIR / args.day]
+else:
+    day_dirs = sorted(d for d in DATA_DIR.iterdir() if d.is_dir())
+
+print(f"Processing {len(day_dirs)} day(s)\n")
+
+all_counts = []
+all_csv_rows = []
+
+for day_dir in day_dirs:
+    counts, csv_rows = process_day(day_dir, n_limit=args.limit)
+    all_counts.extend(counts)
+    all_csv_rows.extend(csv_rows)
+
+# Merge CSV (only meaningful when running all days)
+if not args.day:
+    csv_path = OUT_ROOT / "detections.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["date", "filename", "x", "y", "w", "h", "score"])
+        w.writerows(all_csv_rows)
+    print(f"CSV → {csv_path}")
 
 valid = [c for c in all_counts if c >= 0]
 print("=" * 50)
 print(f"Total images: {len(all_counts)}")
 print(f"Exact 4:      {sum(c == 4 for c in valid)}/{len(valid)}")
-print(f"Mean boxes:   {np.mean(valid):.2f}")
-print(f"CSV → {csv_path}")
+if valid:
+    print(f"Mean boxes:   {np.mean(valid):.2f}")
 print(f"Images → {OUT_ROOT}")

@@ -18,6 +18,6 @@ echo "Job started at: $(date)"
 echo "Host: $(hostname)"
 echo "Working directory: $(pwd)"
 
-conda run -n cv python detect_all_days.py
+conda run -n cv python detect_all_days.py --n 10
 
 echo "Job finished at: $(date)"

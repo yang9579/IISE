@@ -165,32 +165,32 @@ def destripe_rows(gray, mask):
 
 def snap_to_outer_border(gray_destripe, x, y, w, h,
                           border=12, bg_lo=95, bg_hi=115, max_trim=60):
-    """Bidirectional bbox refinement using the destriped image.
+    """Bbox refinement: trim background inward, then scan outward to dark-frame outer edge.
 
-    Pre-computes row/col means once for efficiency, then:
-      1. If edge strip mean is in background range [bg_lo, bg_hi]: trim inward.
-         - Stops at dark  (<bg_lo): outer dark frame found → keep edge.
-         - Stops at bright (>bg_hi): dot boundary → expand outward by `border` px.
-      2. If edge is already dark (<bg_lo): outer frame present → no change.
-      3. If edge is already bright (>bg_hi): dot at edge → expand by `border` px.
+    For each edge:
+      1. If in background [bg_lo, bg_hi]: trim inward until non-background.
+      2. Scan outward from the (possibly trimmed) edge:
+         - If at bright (>bg_hi, dots): scan outward through dots until dark frame found.
+         - If at dark (<dark_thresh, frame inner edge): already in frame, scan outward.
+         - Continue through dark frame until it exits → place edge there.
+         - Fallback to +border px if no dark frame found within scan range.
+      3. Only expand, never shrink the bbox.
     """
     H, W = gray_destripe.shape
-    frac = 0.2  # use middle 60% of perpendicular dimension
+    frac = 0.2
+    dark_thresh = 90  # below this = outer dark frame
 
-    # Pre-compute row means (middle 60% of columns) and col means (middle 60% of rows)
     mh = max(1, int(h * frac))
     mw = max(1, int(w * frac))
-    # Row means for horizontal edge scan (top/bot): mean over middle cols per row
     roi_rows = gray_destripe[max(0, y - max_trim):min(H, y + h + max_trim),
                               max(0, x + mw):min(W, x + w - mw)]
-    row_means = roi_rows.mean(axis=1).astype(float)   # shape: rows in scan range
-    row0 = max(0, y - max_trim)  # offset: row_means[i] = mean of image row (row0 + i)
+    row_means = roi_rows.mean(axis=1).astype(float)
+    row0 = max(0, y - max_trim)
 
-    # Col means for vertical edge scan (lft/rgt): mean over middle rows per col
     roi_cols = gray_destripe[max(0, y + mh):min(H, y + h - mh),
                               max(0, x - max_trim):min(W, x + w + max_trim)]
-    col_means = roi_cols.mean(axis=0).astype(float)   # shape: cols in scan range
-    col0 = max(0, x - max_trim)  # offset: col_means[j] = mean of image col (col0 + j)
+    col_means = roi_cols.mean(axis=0).astype(float)
+    col0 = max(0, x - max_trim)
 
     def row_mean(r):
         i = r - row0
@@ -200,53 +200,84 @@ def snap_to_outer_border(gray_destripe, x, y, w, h,
         j = c - col0
         return float(col_means[j]) if 0 <= j < len(col_means) else 105.0
 
-    # Top edge: trim downward while in background range
-    v = row_mean(y)
-    if bg_lo <= v <= bg_hi:
+    def find_outer_edge(get_mean, pos, direction):
+        """Scan outward from pos to find outer boundary of the dark frame.
+        Returns new position (outward from pos), or pos if no change needed.
+        """
+        v0 = get_mean(pos)
+        p = pos
+
+        if bg_lo <= v0 <= bg_hi:
+            return pos  # at background — trim handles this; no outward scan
+
+        if v0 > bg_hi:
+            # At bright (dots): scan outward through dots to find dark frame
+            for _ in range(40):
+                p += direction
+                v = get_mean(p)
+                if v < dark_thresh:
+                    break               # found dark frame inner edge
+                if bg_lo <= v <= bg_hi:
+                    return pos + direction * border   # no frame found, fallback
+            else:
+                return pos + direction * border       # scan exhausted, fallback
+        else:
+            # v0 < dark_thresh: dark edge (inner frame edge OR dark panel).
+            # Only expand outward if dots are just inside (1-3px inward).
+            # Distinguishes "inner dark frame" (dots nearby → expand)
+            # from "dark panel overshoot" (no dots nearby → keep as-is).
+            dots_nearby = any(get_mean(pos - direction * k) > bg_hi
+                              for k in range(1, 4))
+            if not dots_nearby:
+                return pos  # dark panel or already at outer frame → no change
+
+        # Scan outward through dark frame (max 10 steps) to find its outer edge
+        for _ in range(10):
+            p += direction
+            v = get_mean(p)
+            if v >= dark_thresh:   # exited dark frame
+                return p
+        return p   # still dark (thick frame or panel) — use current pos
+
+    # ── Top edge ──────────────────────────────────────────────────────────────
+    if bg_lo <= row_mean(y) <= bg_hi:
         for _ in range(max_trim):
             if h <= 2: break
-            nv = row_mean(y + 1)
-            if bg_lo <= nv <= bg_hi: y += 1; h -= 1
+            if bg_lo <= row_mean(y + 1) <= bg_hi: y += 1; h -= 1
             else: break
-        v = row_mean(y)
-    if v > bg_hi:
-        y = max(0, y - border); h = min(H - y, h + border)
+    new_y = find_outer_edge(row_mean, y, -1)
+    if new_y < y:
+        h += y - new_y; y = max(0, new_y)
 
-    # Bottom edge: trim upward while in background range
-    v = row_mean(y + h - 1)
-    if bg_lo <= v <= bg_hi:
+    # ── Bottom edge ───────────────────────────────────────────────────────────
+    if bg_lo <= row_mean(y + h - 1) <= bg_hi:
         for _ in range(max_trim):
             if h <= 2: break
-            nv = row_mean(y + h - 2)
-            if bg_lo <= nv <= bg_hi: h -= 1
+            if bg_lo <= row_mean(y + h - 2) <= bg_hi: h -= 1
             else: break
-        v = row_mean(y + h - 1)
-    if v > bg_hi:
-        h = min(H - y, h + border)
+    new_bot = find_outer_edge(row_mean, y + h - 1, +1)
+    if new_bot > y + h - 1:
+        h = min(H - y, new_bot - y)
 
-    # Left edge: trim rightward while in background range
-    v = col_mean(x)
-    if bg_lo <= v <= bg_hi:
+    # ── Left edge ─────────────────────────────────────────────────────────────
+    if bg_lo <= col_mean(x) <= bg_hi:
         for _ in range(max_trim):
             if w <= 2: break
-            nv = col_mean(x + 1)
-            if bg_lo <= nv <= bg_hi: x += 1; w -= 1
+            if bg_lo <= col_mean(x + 1) <= bg_hi: x += 1; w -= 1
             else: break
-        v = col_mean(x)
-    if v > bg_hi:
-        x = max(0, x - border); w = min(W - x, w + border)
+    new_x = find_outer_edge(col_mean, x, -1)
+    if new_x < x:
+        w += x - new_x; x = max(0, new_x)
 
-    # Right edge: trim leftward while in background range
-    v = col_mean(x + w - 1)
-    if bg_lo <= v <= bg_hi:
+    # ── Right edge ────────────────────────────────────────────────────────────
+    if bg_lo <= col_mean(x + w - 1) <= bg_hi:
         for _ in range(max_trim):
             if w <= 2: break
-            nv = col_mean(x + w - 2)
-            if bg_lo <= nv <= bg_hi: w -= 1
+            if bg_lo <= col_mean(x + w - 2) <= bg_hi: w -= 1
             else: break
-        v = col_mean(x + w - 1)
-    if v > bg_hi:
-        w = min(W - x, w + border)
+    new_right = find_outer_edge(col_mean, x + w - 1, +1)
+    if new_right > x + w - 1:
+        w = min(W - x, new_right - x)
 
     return x, y, w, h
 
@@ -275,16 +306,37 @@ def nms(rects, iou_thresh=0.3):
 
 # ── Detection ──────────────────────────────────────────────────────────────────
 
+def _iou(a, b):
+    """Intersection-over-Union of two (x, y, w, h, ...) boxes."""
+    ax, ay, aw, ah = a[0], a[1], a[2], a[3]
+    bx, by, bw, bh = b[0], b[1], b[2], b[3]
+    ix = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
+
 def detect_in_circle(gray, cx, cy, r):
     """
     Multi-scale detection: run Canny at sigma=3,5,8, combine candidates, NMS → top-2.
     Returns (boxes, edges_vis, closed_vis)
-    boxes: list of (x, y, w, h, score)
+    boxes: list of (x, y, w, h, score)  — coordinates in original image space
     """
-    mask = make_mask(gray.shape, cx, cy, r)
+    H_full, W_full = gray.shape
 
-    # Keep original for bright-band check (before row-equalisation changes absolute levels)
-    gray_orig = gray
+    # ── Crop to circle bounding box for speed ──────────────────────────────
+    # All heavy ops (Gaussian blur, Canny, morphology) run on a ~1884×1884
+    # sub-image instead of the full 4100×2048 image → ~4× faster.
+    x0 = max(0, cx - r)
+    y0 = max(0, cy - r)
+    x1 = min(W_full, cx + r)
+    y1 = min(H_full, cy + r)
+    gray = gray[y0:y1, x0:x1]          # work in crop coordinates from here
+    ccx  = cx - x0                      # circle center in crop coords
+    ccy  = cy - y0
+
+    mask = make_mask(gray.shape, ccx, ccy, r)
 
     # Destripe: equalise per-row brightness to suppress horizontal stripe artefacts
     gray = destripe_rows(gray, mask)  # adaptive correction based on stripe severity
@@ -332,8 +384,7 @@ def detect_in_circle(gray, cx, cy, r):
             if not (1.1 < aspect < 3.5):
                 continue
             # Step-edge FPs are wide (asp>2.2) AND near the circle equator (<200px).
-            # Real boxes far from the equator may legitimately be wide due to stripes.
-            if aspect > 2.2 and abs(y + h // 2 - cy) < 200:
+            if aspect > 2.2 and abs(y + h // 2 - ccy) < 200:
                 continue
 
             # Absolute size limits based on observed box dimensions
@@ -351,18 +402,18 @@ def detect_in_circle(gray, cx, cy, r):
                 continue
 
             dc    = darkness_contrast(gray, x, y, w, h)
+            if dc > 25:
+                continue
+
             score = np.log1p(var) * (1 + max(0.0, dc) * 0.05)
             all_candidates.append((x, y, w, h, score))
 
     # ── Method 3: Local-contrast dark border ─────────────────────────────
-    # Box borders are black — locally darker than their surroundings by ≥20 levels.
-    # Local approach handles both bright-background and dark-background boxes.
     local_bg   = cv2.GaussianBlur(gray.astype(np.float32), (0, 0), 25)
     local_dark = np.clip(local_bg - gray.astype(np.float32), 0, 255).astype(np.uint8)
     local_dark = cv2.bitwise_and(local_dark, local_dark, mask=mask)
     _, dark = cv2.threshold(local_dark, 20, 255, cv2.THRESH_BINARY)
 
-    # Close gaps along each border side with a small cross kernel
     k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
     k_open  = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     dark_closed = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, k_close)
@@ -380,8 +431,7 @@ def detect_in_circle(gray, cx, cy, r):
         aspect = w / (h + 1e-5)
         if not (1.1 < aspect < 3.5):
             continue
-        # Same combined filter as Canny: wide boxes only allowed far from equator
-        if aspect > 2.2 and abs(y + h // 2 - cy) < 200:
+        if aspect > 2.2 and abs(y + h // 2 - ccy) < 200:
             continue
         if h > 350 or w > 550:
             continue
@@ -392,26 +442,186 @@ def detect_in_circle(gray, cx, cy, r):
         var = interior_variance(gray, x, y, w, h)
         if var < 5.0:
             continue
-        # Step-edge FPs: step passes through the box as one very bright row →
-        # has_no_bright_interior_band catches them (max_row/median > 1.6).
-        # has_dark_border is NOT used here: Method 3's morphological bbox is
-        # inflated beyond the actual border, so border strips land in the bright
-        # interior and would incorrectly reject real boxes in overexposed images.
         if not has_no_bright_interior_band(gray, x, y, w, h):
             continue
         dc    = darkness_contrast(gray, x, y, w, h)
+        if dc > 25:
+            continue
         score = np.log1p(var) * (1 + max(0.0, dc) * 0.05)
         all_candidates.append((x, y, w, h, score))
 
+    # ── Soft-parameter gap-filling: Canny(4, 15) ─────────────────────────
+    # Run a second Canny pass with lower thresholds (more sensitive to faint
+    # box borders in low-contrast scenes).  A soft candidate is only kept if
+    # it does NOT overlap (IoU < 0.3) with any strict candidate — so it only
+    # fills regions the strict pass missed, never displacing real detections.
+    candidates_strict = list(all_candidates)
+    for sigma, ksize, dil_iter in [(5, 5, 2), (8, 5, 1)]:
+        blur   = cv2.GaussianBlur(eq, (0, 0), sigma)
+        edges  = cv2.Canny(blur, 4, 15)
+        edges  = cv2.bitwise_and(edges, edges, mask=mask)
+        k      = cv2.getStructuringElement(cv2.MORPH_RECT, (ksize, ksize))
+        closed = cv2.dilate(edges, k, iterations=dil_iter)
+        contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL,
+                                        cv2.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            x, y, w, h = cv2.boundingRect(cnt)
+            if w * h < min_bbox or w * h > max_bbox: continue
+            if w < 40 or h < 30: continue
+            aspect = w / (h + 1e-5)
+            if not (1.1 < aspect < 3.5): continue
+            if aspect > 2.2 and abs(y + h // 2 - ccy) < 200: continue
+            if h > 350 or w > 550: continue
+            peri   = cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, 0.025 * peri, True)
+            if not (4 <= len(approx) <= 12): continue
+            var = interior_variance(gray, x, y, w, h)
+            if var < 5.0: continue
+            # Only fill gaps — skip if overlapping any strict candidate
+            if any(_iou((x, y, w, h), s) >= 0.3 for s in candidates_strict):
+                continue
+            dc    = darkness_contrast(gray, x, y, w, h)
+            if dc > 25:
+                continue
+
+            score = np.log1p(var) * (1 + max(0.0, dc) * 0.05)
+            all_candidates.append((x, y, w, h, score))
+
     candidates = nms(all_candidates, iou_thresh=0.3)
     candidates.sort(key=lambda r: r[4], reverse=True)
-    top2 = candidates[:2]
 
-    # Refine each bbox using the destriped image (trim background, add border).
+    # Prefer one box from upper half and one from lower half of the circle.
+    upper = [c for c in candidates if (c[1] + c[3] / 2) < ccy]
+    lower = [c for c in candidates if (c[1] + c[3] / 2) >= ccy]
+
+    # ── Per-half sigma=20 gap-filling ─────────────────────────────────────
+    # For each half missing a candidate, check that half's brightness.
+    # Only run sigma=20 Canny(2,8) if that half is dark (median < 130).
+    # This avoids FPs on bright-background scenes.
+    def _half_median(y_start, y_end):
+        region = eq[y_start:y_end, :]
+        region_mask = mask[y_start:y_end, :]
+        px = region[region_mask > 0]
+        return int(np.median(px)) if len(px) > 0 else 255
+
+    def _sigma20_candidates(existing):
+        blur20  = cv2.GaussianBlur(eq, (0, 0), 20)
+        edges20 = cv2.Canny(blur20, 2, 8)
+        edges20 = cv2.bitwise_and(edges20, edges20, mask=mask)
+        k       = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        closed20 = cv2.dilate(edges20, k, iterations=2)
+        cnts, _ = cv2.findContours(closed20, cv2.RETR_EXTERNAL,
+                                    cv2.CHAIN_APPROX_SIMPLE)
+        new = []
+        for cnt in cnts:
+            x, y, w, h = cv2.boundingRect(cnt)
+            if w * h < min_bbox or w * h > max_bbox: continue
+            if w < 40 or h < 30: continue
+            aspect = w / (h + 1e-5)
+            if not (1.1 < aspect < 3.5): continue
+            if aspect > 2.2 and abs(y + h // 2 - ccy) < 200: continue
+            if h > 350 or w > 550: continue
+            peri   = cv2.arcLength(cnt, True)
+            approx = cv2.approxPolyDP(cnt, 0.025 * peri, True)
+            if not (4 <= len(approx) <= 12): continue
+            var = interior_variance(gray, x, y, w, h)
+            if var < 5.0: continue
+            if any(_iou((x, y, w, h), s) >= 0.3 for s in existing): continue
+            dc    = darkness_contrast(gray, x, y, w, h)
+            if dc > 25:
+                continue
+
+            score = np.log1p(var) * (1 + max(0.0, dc) * 0.05)
+            new.append((x, y, w, h, score))
+        return new
+
+    def _fallback_candidates(y_start, y_end, existing):
+        """Re-run all Canny passes without dc>25 filter for a specific half.
+        Only triggered when a half has no candidates after all normal passes.
+        """
+        new = []
+        passes = [(5, 5, 2, 5, 20), (8, 5, 1, 5, 20),   # strict Canny
+                  (5, 5, 2, 4, 15), (8, 5, 1, 4, 15),   # soft Canny
+                  (20, 7, 2, 2, 8)]                       # sigma=20
+        for sigma, ksize, dil_iter, lo, hi in passes:
+            blur   = cv2.GaussianBlur(eq, (0, 0), sigma)
+            edges  = cv2.Canny(blur, lo, hi)
+            edges  = cv2.bitwise_and(edges, edges, mask=mask)
+            k      = cv2.getStructuringElement(cv2.MORPH_RECT, (ksize, ksize))
+            closed = cv2.dilate(edges, k, iterations=dil_iter)
+            cnts, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL,
+                                        cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in cnts:
+                x, y, w, h = cv2.boundingRect(cnt)
+                if not (y_start <= y + h // 2 < y_end): continue
+                if w * h < min_bbox or w * h > max_bbox: continue
+                if w < 40 or h < 30 or h > 350 or w > 550: continue
+                aspect = w / (h + 1e-5)
+                if not (1.1 < aspect < 3.5): continue
+                if aspect > 2.2 and abs(y + h // 2 - ccy) < 200: continue
+                peri   = cv2.arcLength(cnt, True)
+                approx = cv2.approxPolyDP(cnt, 0.025 * peri, True)
+                if not (4 <= len(approx) <= 12): continue
+                var = interior_variance(gray, x, y, w, h)
+                if var < 5.0: continue
+                if any(_iou((x, y, w, h), s) >= 0.3 for s in existing): continue
+                dc    = darkness_contrast(gray, x, y, w, h)
+                score = np.log1p(var) * (1 + max(0.0, dc) * 0.05)
+                new.append((x, y, w, h, score))
+        return new
+
+    added_sigma20 = False
+    if not upper:
+        upper_median = _half_median(0, ccy)
+        if upper_median < 130:
+            new_cands = _sigma20_candidates(candidates)
+            upper_new = [c for c in new_cands if (c[1] + c[3] / 2) < ccy]
+            if upper_new:
+                candidates = nms(candidates + upper_new, iou_thresh=0.3)
+                candidates.sort(key=lambda r: r[4], reverse=True)
+                upper = [c for c in candidates if (c[1] + c[3] / 2) < ccy]
+                added_sigma20 = True
+
+    if not lower:
+        lower_median = _half_median(ccy, eq.shape[0])
+        if lower_median < 130:
+            existing = candidates if added_sigma20 else candidates
+            new_cands = _sigma20_candidates(existing)
+            lower_new = [c for c in new_cands if (c[1] + c[3] / 2) >= ccy]
+            if lower_new:
+                candidates = nms(candidates + lower_new, iou_thresh=0.3)
+                candidates.sort(key=lambda r: r[4], reverse=True)
+                lower = [c for c in candidates if (c[1] + c[3] / 2) >= ccy]
+
+    # ── Fallback: relax dc>25 constraint for any half still empty ─────────
+    # If a half has no candidates after all passes (incl. sigma=20), re-run
+    # without the dc filter — only for that spatial region.
+    if not upper:
+        fb = _fallback_candidates(0, ccy, candidates)
+        if fb:
+            fb.sort(key=lambda r: r[4], reverse=True)
+            candidates = nms(candidates + [fb[0]], iou_thresh=0.3)
+            candidates.sort(key=lambda r: r[4], reverse=True)
+            upper = [c for c in candidates if (c[1] + c[3] / 2) < ccy]
+
+    if not lower:
+        fb = _fallback_candidates(ccy, eq.shape[0], candidates)
+        if fb:
+            fb.sort(key=lambda r: r[4], reverse=True)
+            candidates = nms(candidates + [fb[0]], iou_thresh=0.3)
+            candidates.sort(key=lambda r: r[4], reverse=True)
+            lower = [c for c in candidates if (c[1] + c[3] / 2) >= ccy]
+
+    if upper and lower:
+        top2 = [upper[0], lower[0]]
+    else:
+        top2 = candidates[:2]
+
+    # snap in crop coordinates, then translate back to full-image coordinates
     snapped = []
     for x, y, w, h, sc in top2:
         x2, y2, w2, h2 = snap_to_outer_border(gray, x, y, w, h)
-        snapped.append((x2, y2, w2, h2, sc))
+        snapped.append((x2 + x0, y2 + y0, w2, h2, sc))
     return snapped, edges_vis, closed_vis
 
 
