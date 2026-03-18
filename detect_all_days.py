@@ -87,12 +87,13 @@ def process_day(day_dir, n_limit=None):
     exact4 = sum(c == 4 for c in counts)
     print(f"  → {exact4}/{len(counts)} exact-4\n")
 
-    # Per-day CSV
-    csv_path = OUT_ROOT / day_dir.name / f"detections_{day_dir.name}.csv"
-    with open(csv_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["date", "filename", "x", "y", "w", "h", "score"])
-        w.writerows(csv_rows)
+    # Per-day CSV (skipped when not saving images)
+    if not args.no_save_images:
+        csv_path = OUT_ROOT / day_dir.name / f"detections_{day_dir.name}.csv"
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["date", "filename", "x", "y", "w", "h", "score"])
+            w.writerows(csv_rows)
 
     return counts, csv_rows
 
