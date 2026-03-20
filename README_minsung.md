@@ -1,26 +1,50 @@
-# Hole Array Detection (`anchor_blue.py`)
+# Optical Feature Detection Pipeline
 
-This repository contains a computer vision script designed to automatically detect and draw bounding boxes around fixed-size hole arrays (220x110 pixels) on panel images. It is optimized to handle varying lighting conditions and panel colors using dynamic thresholding.
+This project contains an automated computer vision pipeline designed to robustly detect specific hardware features (bright arrays and dark frames) across varying and uneven lighting conditions. 
 
-## How It Works (The Logic)
+## Usage
 
-The script processes images in a step-by-step pipeline to isolate the target arrays while ignoring edge artifacts, shadows, and dust. 
-
-1. **Quadrant Splitting**: The input image is divided into four equal quadrants (top-left, top-right, bottom-left, bottom-right). Each quadrant is processed independently.
-2. **"R-Region" Extraction**: Inside each quadrant, the script defines a safe "R-Region" (cropped 20% from the sides, 15% from the top) to avoid the physical curvature of the camera and the center cross of the panel. 
-3. **Background Color Calculation**: It calculates a 256-bin histogram of the R-Region to find the "majority background value" (the mode). It explicitly ignores pure black (shadows/edges) and pure white (holes/sealing lines) to ensure an accurate reading of the panel's actual color.
-4. **Dynamic Thresholding**: Based on the majority background value, the script calculates a custom threshold offset. Darker panels get a smaller offset to catch faint holes, while lighter panels get a larger offset to avoid thresholding the background itself.
-5. **Noise Filtering & Fusing**: 
-    * It finds contours in the thresholded binary image and filters out tiny specks (dust) and massive objects.
-    * It applies a morphological closing operation (`cv2.morphologyEx`) to visually "fuse" the individual holes together into a single, solid blob.
-6. **Fixed Bounding Box Selection**: It searches for the largest fused blob that matches expected aspect ratio and area constraints. Once the center of this blob is found, the script forces a fixed **220x110 pixel** blue bounding box around that center point.
-7. **Visualization**: Finally, it plots the results on a grid, drawing the orange R-Region boxes and the blue Array boxes, and saves the final figure to an output directory.
-
----
-
-## Requirements
-
-Ensure you have Python installed, along with the required computer vision and plotting libraries. You can install the dependencies using `pip`:
+Run the script by passing your dataset directory and desired output directory via command-line arguments:
 
 ```bash
-pip install opencv-python numpy matplotlib
+python main.py --input /path/to/dataset --output /path/to/save/figures --samples 10
+```
+
+* `--input`: The root folder containing your images, organized by day (e.g., `/dataset/03/`, `/dataset/04/`).
+* `--output`: The directory where the diagnostic multi-image grids will be saved.
+* `--samples`: (Optional) Number of random images to sample per day directory (defaults to 10).
+
+## Methodology
+
+This algorithm uses a multi-stage, fault-tolerant approach to find features regardless of lighting variations or missing components.
+
+### 1. Image Segmentation (4 Quadrants)
+To handle severe lighting gradients, the image is split into 4 independent quadrants (top left, top right, bottom left, bottom right). By processing locally, a bright glare in one corner will not skew the detection logic in a dark corner.
+
+### 2. Primary Target: Detecting Bright Array (0-255 pixel scale)
+The algorithm first searches for the bright white array slots against the surrounding background.
+
+* **2-1. Determine Background Value (`bg_val`):** Calculate the dominant pixel intensity of the specific region, ignoring pure black (pixel < 15) and pure white (pixel > 240).
+* **2-2. Dynamic Thresholding:** Add a specific offset to `bg_val` to isolate only the bright white holes:
+    * If `bg_val` < 60 (very dark): threshold is `bg_val` + 25
+    * If `bg_val` < 100 (dark): threshold is `bg_val` + 40
+    * If `bg_val` < 150 (medium): threshold is `bg_val` + 55
+    * If `bg_val` >= 150 (light): threshold is `bg_val` + 70
+* **2-3. Fusion & Filtering:** * Discard small noise (contour area < 500 pixels).
+    * Apply a morphological block (25x25 kernel) to fuse the remaining bright holes into one solid shape.
+    * Filter the shape to ensure it matches the physical array dimensions: area between 1,000 and 60,000 pixels, with a rectangular aspect ratio (1.0 to 3.5).
+
+### 3. Fallback Method: Detecting Dark Frame Footprint 
+If the primary array is missing or obscured, the algorithm falls back to finding the dark rectangular depression.
+
+* **3-1. Local Contrast (Adaptive Thresholding):** Evaluate pixels against their local 151x151 neighborhood. Flag pixels that are significantly darker than their immediate surroundings. This bypasses global lighting issues.
+* **3-2. Fusion & Filtering:** * Apply a morphological block (15x15 kernel) to smooth and solidify the dark shape.
+    * Filter the shape to match the larger frame footprint: area between 8,000 and 80,000 pixels, aspect ratio of 1.5 to 3.5.
+
+### 4. Outer Frame Detection (Template Matching)
+Once the inner target (either the bright array or the dark footprint) is found, the algorithm locks onto the outer boundaries.
+
+* **4-1. Targeted Search Area:** Use the center coordinate of the inner box (found in Step 2 or 3) as an anchor. Define a tight search boundary slightly larger than the expected outer frame.
+* **4-2. Feature Extraction:** * If `bg_val` < 85 (dark background): Highlight edges using inverse thresholding at `bg_val` - 15.
+    * If `bg_val` >= 85 (light background): Highlight edges using Canny Edge Detection.
+* **4-3. Template Matching:** Slide a mathematically perfect 340x180 rectangular outline over the search area to find the exact final alignment.
