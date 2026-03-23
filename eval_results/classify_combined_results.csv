@@ -28,7 +28,7 @@ img,total_dots,max_row_x_mean_var,max_x_spacing_std,dot_no_dots,dot_twisted,tota
 20260215_000328_136227_combined.jpg,798,2.1257862361129742,3.980299179341582,False,True,4,0,False,False,False,True,False,0,1,1,1
 20260215_000335_136237_combined.jpg,800,0.05494898162584525,0.4780210823014543,False,False,4,0,False,False,False,False,False,0,0,0,0
 20260215_000349_136257_combined.jpg,800,2.178398893331731,3.963091417436771,False,True,4,0,False,False,False,True,False,0,1,0,1
-20260215_000403_136277_combined.jpg,795,1.9169379907844315,3.676354149945183,False,True,4,0,False,False,False,True,False,0,1,0,1
+20260215_000403_136277_combined.jpg,795,1.9169379907844315,3.676354149945183,False,True,4,0,False,False,False,True,False,0,1,1,1
 20260215_000417_136297_combined.jpg,800,0.05156820511122518,0.4696022953409338,False,False,4,0,False,False,False,False,False,0,0,0,0
 20260215_000431_136317_combined.jpg,793,1.7633798005354253,3.4598698577970017,False,True,4,0,False,False,False,True,False,0,1,0,1
 20260215_000438_136327_combined.jpg,800,0.0539313198208397,0.5014107521606128,False,False,4,0,False,False,False,False,False,0,0,1,1
@@ -53,7 +53,7 @@ img,total_dots,max_row_x_mean_var,max_x_spacing_std,dot_no_dots,dot_twisted,tota
 20260215_000845_136677_combined.jpg,800,0.05367388961676587,0.49775117547523745,False,False,4,0,False,False,False,False,False,0,0,0,0
 20260215_000852_136687_combined.jpg,800,0.06740130776245143,0.4836381055856902,False,False,4,0,False,False,False,False,False,0,0,0,0
 20260215_000859_136697_combined.jpg,800,0.05977798258737098,0.4739472953622201,False,False,4,0,False,False,False,False,False,0,0,0,0
-20260215_000906_136707_combined.jpg,800,3.139947866843684,5.4344958974795645,False,True,4,0,False,False,False,True,False,0,0,1,1
+20260215_000906_136707_combined.jpg,800,3.139947866843684,5.4344958974795645,False,True,4,0,False,False,False,True,False,0,1,1,1
 20260215_000913_136717_combined.jpg,800,0.07735230766683679,0.49023709567136914,False,False,4,0,False,False,False,False,False,0,0,0,0
 20260215_000921_136727_combined.jpg,800,0.048237638894271746,0.47613401591152177,False,False,3,0,False,False,False,False,False,0,0,0,0
 20260215_000935_136747_combined.jpg,800,0.0539313198208397,0.47616310434457043,False,False,4,0,False,False,False,False,False,0,0,0,0
@@ -111,13 +111,13 @@ img,total_dots,max_row_x_mean_var,max_x_spacing_std,dot_no_dots,dot_twisted,tota
 20260215_025238_140647_combined.jpg,0,0.0,0.0,True,False,1,0,True,False,True,False,False,1,0,0,1
 20260215_200656_141387_combined.jpg,0,0.0,0.0,True,False,1,0,True,False,True,False,False,1,0,0,1
 20260215_200735_141397_combined.jpg,0,0.0,0.0,True,False,2,0,True,False,True,False,False,1,0,0,1
-20260215_200812_141407_combined.jpg,0,0.0,0.0,True,False,3,0,False,False,False,False,False,1,0,0,1
+20260215_200812_141407_combined.jpg,0,0.0,0.0,True,False,3,0,False,False,True,False,False,1,0,0,1
 20260215_200828_141417_combined.jpg,0,0.0,0.0,True,False,2,0,True,False,True,False,False,1,0,0,1
-20260215_200845_141427_combined.jpg,0,0.0,0.0,True,False,3,0,False,False,False,False,False,1,0,0,1
+20260215_200845_141427_combined.jpg,0,0.0,0.0,True,False,3,0,False,False,True,False,False,1,0,0,1
 20260215_200925_141437_combined.jpg,0,0.0,0.0,True,False,2,1,True,False,True,False,False,1,0,0,1
 20260215_202551_141447_combined.jpg,0,0.0,0.0,True,False,2,1,True,False,True,False,False,1,0,0,1
 20260215_211148_141537_combined.jpg,0,0.0,0.0,True,False,2,0,True,False,True,False,False,1,0,0,1
-20260215_214004_141547_combined.jpg,0,0.0,0.0,True,False,3,1,False,True,False,False,True,1,0,0,1
+20260215_214004_141547_combined.jpg,0,0.0,0.0,True,False,3,1,False,True,True,False,True,1,0,0,1
 20260216_011150_144257_combined.jpg,806,0.5344204677078227,1.8494176622104934,False,False,3,0,False,False,False,False,False,0,0,1,1
 20260216_011201_144267_combined.jpg,809,3.0426731062675265,5.436798074022122,False,True,3,0,False,False,False,True,False,0,0,1,1
 20260216_012141_144277_combined.jpg,810,4.345946621794428,6.338875966589035,False,True,3,0,False,False,False,True,False,0,0,1,1

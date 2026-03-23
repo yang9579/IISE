@@ -298,6 +298,18 @@ def run(img_dir, dots_csv, labels_csv, out_csv, dt1_mode):
 
     results.to_csv(out_csv, index=False)
     print(f"\nResults → {out_csv}")
+
+    # ── Auto-label output (train_labels.csv format) ───────────────────────────
+    label_out = Path(out_csv).parent / 'auto_labels.csv'
+    label_df = pd.DataFrame({
+        'Image_id': results['img'],
+        'DT1_MP':   results['pred_DT1_MP'].astype(int),
+        'DT2_TP':   results['pred_DT2_TP'].astype(int),
+        'DT3_OOB':  results['pred_DT3_OOB'].astype(int),
+    })
+    label_df.to_csv(label_out, index=False)
+    print(f"Auto-labels → {label_out}")
+
     return results
 
 
@@ -427,7 +439,7 @@ if __name__ == '__main__':
     p.add_argument('--labels',    default='train_labels.csv',
                    help='Ground-truth CSV (train_labels.csv)')
     p.add_argument('--out-csv',   default='eval_results/classify_combined_results.csv')
-    p.add_argument('--dt1-mode',  default='and', choices=['and', 'or'],
+    p.add_argument('--dt1-mode',  default='or', choices=['and', 'or'],
                    help='Logic for DT1_MP: "and" (both agree) or "or" (either)')
     args = p.parse_args()
 
