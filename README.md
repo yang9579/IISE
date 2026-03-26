@@ -7,7 +7,7 @@ Combines a **ResNet-18 binary classifier** with a **rule-based DT sub-type class
 
 ```bash
 # Run the full pipeline (from project root)
-conda run -n cv python IISE/run_defect_detection.py
+conda run -n cv python IISE/detection.py
 ```
 
 This will:
@@ -148,7 +148,7 @@ Splits image into 4 quadrants, detects LED array regions and outer frames:
 
 ```
 IISE/
-├── run_defect_detection.py   # Full pipeline: ROI → binary → DT classification
+├── detection.py   # Full pipeline: ROI → binary → DT classification
 ├── classify_combined.py      # Combined DT1/DT2/DT3 classifier
 ├── detect_dots.py            # White-dot detection (pre-processing)
 ├── classify_minsung.py       # Minsung's standalone frame-based classifier
@@ -164,7 +164,7 @@ IISE/
 
 ## Configuration
 
-All settings are at the top of `run_defect_detection.py`:
+All settings are at the top of `detection.py`:
 
 ```python
 MODEL_PATH   = "best_resnet18_balanced_round2.pth"
