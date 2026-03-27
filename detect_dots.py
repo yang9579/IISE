@@ -414,8 +414,8 @@ CIRCLE_COLORS_BGR = [(0, 220, 0), (0, 120, 255)]    # green, orange
 CIRCLE_COLORS_MPL = ['lime', 'orange']
 
 
-def process_image(img_path, out_dir, method='log', bright_thresh=180):
-    """Detect dots in one image, save CSV + annotated images."""
+def process_image(img_path, out_dir, method='log', bright_thresh=180, save_vis=True):
+    """Detect dots in one image, save CSV and optionally annotated images."""
     img = cv2.imread(str(img_path))
     if img is None:
         raise IOError(f"Cannot read: {img_path}")
@@ -431,18 +431,18 @@ def process_image(img_path, out_dir, method='log', bright_thresh=180):
         for x, y, rad in dots:
             all_dots.append((x, y, rad, cid))
 
-    # ── Annotated JPEG ───────────────────────────────────────────────────────────
-    vis = img.copy()
-    for x, y, rad, cid in all_dots:
-        color = CIRCLE_COLORS_BGR[cid % len(CIRCLE_COLORS_BGR)]
-        cv2.circle(vis, (x, y), max(2, int(rad)), color, 1)
-        cv2.circle(vis, (x, y), 1, color, -1)
+    if save_vis:
+        vis = img.copy()
+        for x, y, rad, cid in all_dots:
+            color = CIRCLE_COLORS_BGR[cid % len(CIRCLE_COLORS_BGR)]
+            cv2.circle(vis, (x, y), max(2, int(rad)), color, 1)
+            cv2.circle(vis, (x, y), 1, color, -1)
 
-    for cid, (cx, cy, r) in enumerate(circles):
-        cv2.circle(vis, (cx, cy), r, (180, 180, 180), 2)
+        for cid, (cx, cy, r) in enumerate(circles):
+            cv2.circle(vis, (cx, cy), r, (180, 180, 180), 2)
 
-    annot_path = out_dir / f"{img_path.stem}_dots.jpg"
-    cv2.imwrite(str(annot_path), vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        annot_path = out_dir / f"{img_path.stem}_dots.jpg"
+        cv2.imwrite(str(annot_path), vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
 
     return all_dots
 
@@ -463,6 +463,12 @@ def parse_args():
                    help="Blob detector: 'log' (LoG, default) or 'dog' (DoG)")
     p.add_argument("--bright-thresh", default=180, type=int,
                    help="Min pixel intensity to consider as a white dot (default: 180)")
+    p.add_argument("--no-vis", action="store_true",
+                   help="Skip writing annotated dot visualization images")
+    p.add_argument("--quiet", action="store_true",
+                   help="Suppress per-image logs; print only summary/progress checkpoints")
+    p.add_argument("--progress-every", default=100, type=int,
+                   help="When --quiet is used, print progress every N images (default: 100)")
     return p.parse_args()
 
 
@@ -485,10 +491,15 @@ def main():
         try:
             dots = process_image(img_path, args.out_dir,
                                  method=args.method,
-                                 bright_thresh=args.bright_thresh)
-            c0 = sum(1 for _, _, _, cid in dots if cid == 0)
-            c1 = sum(1 for _, _, _, cid in dots if cid == 1)
-            print(f"  [{i:3d}] {img_path.name}: {len(dots)} dots  (L:{c0} R:{c1})")
+                                 bright_thresh=args.bright_thresh,
+                                 save_vis=not args.no_vis)
+            if args.quiet:
+                if args.progress_every and ((i % args.progress_every == 0) or i == len(images)):
+                    print(f"  Processed {i}/{len(images)} images")
+            else:
+                c0 = sum(1 for _, _, _, cid in dots if cid == 0)
+                c1 = sum(1 for _, _, _, cid in dots if cid == 1)
+                print(f"  [{i:3d}] {img_path.name}: {len(dots)} dots  (L:{c0} R:{c1})")
             for x, y, rad, cid in dots:
                 sigma = rad / np.sqrt(2)
                 all_csv_rows.append([img_path.name, x, y, f'{sigma:.2f}', cid])
