@@ -19,8 +19,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).parent / 'minsung_image'))
 sys.path.insert(0, str(Path(__file__).parent))
 
-import detect_dots as _dd_module
-from detect_dots import detect_blobs_in_circle, get_circle_params
+from detect_dots import detect_image_improved, get_circle_params
 from classify_combined import (
     dot_metrics, classify_combined,
     array_box_from_dots, find_frame_by_scan,
@@ -41,103 +40,9 @@ from minsung_image.general_detector import (
 
 # ─── Dot detection using the real detect_dots pipeline ───────────────────────
 
-# Relaxed lattice parameters for the fallback path (dark-background panels where
-# the strict anchor ratio / anchor count filters are too aggressive).
-_RELAXED_LATTICE = {
-    'DOT_LATTICE_MIN_ANCHORS':      10,
-    'DOT_LATTICE_MIN_ANCHOR_RATIO': 0.08,
-    'DOT_CLUSTER_MIN_COUNT':        30,
-}
-
-
-def _detect_blobs_relaxed(gray, cx, cy, r, bright_thresh):
-    """detect_blobs_in_circle with temporarily relaxed lattice/cluster limits."""
-    saved = {k: getattr(_dd_module, k) for k in _RELAXED_LATTICE}
-    try:
-        for k, v in _RELAXED_LATTICE.items():
-            setattr(_dd_module, k, v)
-        return detect_blobs_in_circle(gray, cx, cy, r, bright_thresh=bright_thresh)
-    finally:
-        for k, v in saved.items():
-            setattr(_dd_module, k, v)
-
-
 def detect_dots_for_image(img_gray, img_name):
-    """Detect dots using the full detect_blobs_in_circle pipeline.
-
-    For each circle, sweeps bright_thresh in [80,100,120,140,160,180] and picks
-    the value that covers the most quadrants (each half of the circle) with >= 50
-    dots.  This handles three scenarios:
-      - Very dim dots (e.g. dark PCB, low contrast): needs low threshold ~100-120
-      - Normal dots:                                  default 180 works fine
-      - Bright-background panels with a bright stripe: low threshold floods the
-        cluster filter; needs high threshold (160-180) to suppress stripe noise
-
-    If a half still has <50 dots after the main sweep, a second sweep is run with
-    relaxed lattice constraints (lower anchor count / ratio thresholds).  This
-    recovers borderline-valid panels that the strict lattice filter rejects, without
-    affecting halves that already have good coverage.
-    """
-    H, W = img_gray.shape
-    circles = get_circle_params(img_gray.shape)
-    rows = []
-    for ci, (cx, cy, r) in enumerate(circles):
-        best_blobs = []
-        best_score = -1
-        for thr in [80, 100, 120, 140, 160, 180]:
-            blobs = detect_blobs_in_circle(img_gray, cx, cy, r, bright_thresh=thr)
-            # Score by how many of the 2 vertical halves have >= 50 dots
-            n_top = sum(1 for bx, by, _ in blobs if by < H // 2)
-            n_bot = sum(1 for bx, by, _ in blobs if by >= H // 2)
-            covered = (n_top >= 50) + (n_bot >= 50)
-            score = covered * 100000 + len(blobs)
-            if score > best_score:
-                best_score = score
-                best_blobs = blobs
-
-        # Per-half fallback: if a half has <50 dots from the main sweep, retry
-        # with relaxed lattice params to recover borderline-valid panels.
-        main_top = [b for b in best_blobs if b[1] < H // 2]
-        main_bot = [b for b in best_blobs if b[1] >= H // 2]
-
-        if len(main_top) < 50 or len(main_bot) < 50:
-            fb_best = []
-            fb_best_score = -1
-            for thr in [80, 100, 120, 140, 160, 180]:
-                fb = _detect_blobs_relaxed(img_gray, cx, cy, r, thr)
-                fb_top = sum(1 for bx, by, _ in fb if by < H // 2)
-                fb_bot = sum(1 for bx, by, _ in fb if by >= H // 2)
-                fb_covered = (fb_top >= 50) + (fb_bot >= 50)
-                fb_score   = fb_covered * 100000 + len(fb)
-                if fb_score > fb_best_score:
-                    fb_best_score = fb_score
-                    fb_best = fb
-
-            fb_top = [b for b in fb_best if b[1] < H // 2]
-            fb_bot = [b for b in fb_best if b[1] >= H // 2]
-
-            merged = []
-            # Use main result for the half that already has ≥50; use fallback otherwise.
-            if len(main_top) >= 50:
-                merged.extend(main_top)
-            elif len(fb_top) >= 50:
-                merged.extend(fb_top)
-            else:
-                merged.extend(main_top)  # keep whatever we have
-
-            if len(main_bot) >= 50:
-                merged.extend(main_bot)
-            elif len(fb_bot) >= 50:
-                merged.extend(fb_bot)
-            else:
-                merged.extend(main_bot)
-
-            best_blobs = merged
-
-        for bx, by, radius in best_blobs:
-            sigma = radius / np.sqrt(2)
-            rows.append({'img': img_name, 'x': int(round(bx)), 'y': int(round(by)),
-                         'sigma': float(sigma), 'circle_id': ci})
+    """Detect dots using detect_image_improved (multi-threshold sweep + relaxed-lattice fallback)."""
+    rows = detect_image_improved(img_gray, img_name)
     return pd.DataFrame(rows) if rows else pd.DataFrame(columns=['img', 'x', 'y', 'sigma', 'circle_id'])
 
 

@@ -408,6 +408,106 @@ def recover_candidates_in_boxes(strong_blobs, raw_candidates, keep_boxes, x0, y0
     return recovered
 
 
+# ── improved multi-threshold detection ──────────────────────────────────────────
+
+# Relaxed lattice parameters for dark-background panels (e.g. 0323 series) where
+# the strict anchor ratio / anchor count filters reject borderline-valid panels.
+_RELAXED_LATTICE_PARAMS = {
+    'DOT_LATTICE_MIN_ANCHORS':      10,
+    'DOT_LATTICE_MIN_ANCHOR_RATIO': 0.08,
+    'DOT_CLUSTER_MIN_COUNT':        30,
+}
+
+import sys as _sys
+_this_module = _sys.modules[__name__]
+
+
+def _detect_blobs_relaxed(gray, cx, cy, r, bright_thresh=180):
+    """detect_blobs_in_circle with temporarily relaxed lattice/cluster limits."""
+    saved = {k: getattr(_this_module, k) for k in _RELAXED_LATTICE_PARAMS}
+    try:
+        for k, v in _RELAXED_LATTICE_PARAMS.items():
+            setattr(_this_module, k, v)
+        return detect_blobs_in_circle(gray, cx, cy, r, bright_thresh=bright_thresh)
+    finally:
+        for k, v in saved.items():
+            setattr(_this_module, k, v)
+
+
+def detect_image_improved(gray, img_name):
+    """Detect dots with multi-threshold sweep and relaxed-lattice fallback.
+
+    For each camera circle, sweeps bright_thresh in [80,100,120,140,160,180]
+    and picks the value that covers the most half-circles with >=50 dots.
+    If either half still has <50 dots, retries with relaxed lattice params to
+    recover borderline-valid panels (e.g. dark-background 0323 series).
+
+    Returns
+    -------
+    list of dict  — each dict has keys: img, x, y, sigma, circle_id
+    """
+    import numpy as _np
+    H, W = gray.shape
+    circles = get_circle_params(gray.shape)
+    rows = []
+    for ci, (cx, cy, r) in enumerate(circles):
+        # Main sweep — strict lattice params
+        best_blobs = []
+        best_score = -1
+        for thr in [80, 100, 120, 140, 160, 180]:
+            blobs = detect_blobs_in_circle(gray, cx, cy, r, bright_thresh=thr)
+            n_top = sum(1 for bx, by, _ in blobs if by < H // 2)
+            n_bot = sum(1 for bx, by, _ in blobs if by >= H // 2)
+            covered = (n_top >= 50) + (n_bot >= 50)
+            score = covered * 100000 + len(blobs)
+            if score > best_score:
+                best_score = score
+                best_blobs = blobs
+
+        # Per-half fallback — relaxed lattice params for uncovered halves
+        main_top = [b for b in best_blobs if b[1] < H // 2]
+        main_bot = [b for b in best_blobs if b[1] >= H // 2]
+
+        if len(main_top) < 50 or len(main_bot) < 50:
+            fb_best = []
+            fb_best_score = -1
+            for thr in [80, 100, 120, 140, 160, 180]:
+                fb = _detect_blobs_relaxed(gray, cx, cy, r, bright_thresh=thr)
+                fb_top = sum(1 for bx, by, _ in fb if by < H // 2)
+                fb_bot = sum(1 for bx, by, _ in fb if by >= H // 2)
+                fb_covered = (fb_top >= 50) + (fb_bot >= 50)
+                fb_score   = fb_covered * 100000 + len(fb)
+                if fb_score > fb_best_score:
+                    fb_best_score = fb_score
+                    fb_best = fb
+
+            fb_top = [b for b in fb_best if b[1] < H // 2]
+            fb_bot = [b for b in fb_best if b[1] >= H // 2]
+
+            merged = []
+            if len(main_top) >= 50:
+                merged.extend(main_top)
+            elif len(fb_top) >= 50:
+                merged.extend(fb_top)
+            else:
+                merged.extend(main_top)
+
+            if len(main_bot) >= 50:
+                merged.extend(main_bot)
+            elif len(fb_bot) >= 50:
+                merged.extend(fb_bot)
+            else:
+                merged.extend(main_bot)
+
+            best_blobs = merged
+
+        for bx, by, radius in best_blobs:
+            sigma = radius / _np.sqrt(2)
+            rows.append({'img': img_name, 'x': int(round(bx)), 'y': int(round(by)),
+                         'sigma': float(sigma), 'circle_id': ci})
+    return rows
+
+
 # ── per-image processing ────────────────────────────────────────────────────────
 
 CIRCLE_COLORS_BGR = [(0, 220, 0), (0, 120, 255)]    # green, orange
@@ -489,20 +589,37 @@ def main():
     all_csv_rows = []
     for i, img_path in enumerate(images, 1):
         try:
-            dots = process_image(img_path, args.out_dir,
-                                 method=args.method,
-                                 bright_thresh=args.bright_thresh,
-                                 save_vis=not args.no_vis)
+            img = cv2.imread(str(img_path))
+            if img is None:
+                raise IOError(f"Cannot read: {img_path}")
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+            # Use improved multi-threshold sweep with relaxed-lattice fallback
+            dot_rows = detect_image_improved(gray, img_path.name)
+
+            if not args.no_vis and dot_rows:
+                vis = img.copy()
+                circles = get_circle_params(gray.shape)
+                for d in dot_rows:
+                    cid = d['circle_id']
+                    color = CIRCLE_COLORS_BGR[cid % len(CIRCLE_COLORS_BGR)]
+                    rad = int(round(d['sigma'] * np.sqrt(2)))
+                    cv2.circle(vis, (d['x'], d['y']), max(2, rad), color, 1)
+                    cv2.circle(vis, (d['x'], d['y']), 1, color, -1)
+                for cid, (cx, cy, r) in enumerate(circles):
+                    cv2.circle(vis, (cx, cy), r, (180, 180, 180), 2)
+                annot_path = args.out_dir / f"{img_path.stem}_dots.jpg"
+                cv2.imwrite(str(annot_path), vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
+
             if args.quiet:
                 if args.progress_every and ((i % args.progress_every == 0) or i == len(images)):
                     print(f"  Processed {i}/{len(images)} images")
             else:
-                c0 = sum(1 for _, _, _, cid in dots if cid == 0)
-                c1 = sum(1 for _, _, _, cid in dots if cid == 1)
-                print(f"  [{i:3d}] {img_path.name}: {len(dots)} dots  (L:{c0} R:{c1})")
-            for x, y, rad, cid in dots:
-                sigma = rad / np.sqrt(2)
-                all_csv_rows.append([img_path.name, x, y, f'{sigma:.2f}', cid])
+                c0 = sum(1 for d in dot_rows if d['circle_id'] == 0)
+                c1 = sum(1 for d in dot_rows if d['circle_id'] == 1)
+                print(f"  [{i:3d}] {img_path.name}: {len(dot_rows)} dots  (L:{c0} R:{c1})")
+            for d in dot_rows:
+                all_csv_rows.append([d['img'], d['x'], d['y'], f"{d['sigma']:.2f}", d['circle_id']])
         except Exception as e:
             import traceback
             print(f"  [{i:3d}] {img_path.name}: ERROR — {e}")
