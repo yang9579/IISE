@@ -298,7 +298,7 @@ def filter_blob_clusters(blobs, patch_shape, x0, y0):
     the bright horizontal trace form long thin groups with poor height/span.
     """
     if not blobs:
-        return []
+        return [], []
 
     H, W = patch_shape
     point_map = np.zeros((H, W), dtype=np.uint8)
